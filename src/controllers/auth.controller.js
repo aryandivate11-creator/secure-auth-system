@@ -460,38 +460,53 @@ export const resendOtp = async (req, res) => {
    try {
 
       const { email } = req.body;
-   
+
+      // =========================
+      // Validation
+      // =========================
+
       if (!email) {
          return res.status(400).json({
             message: "Email is required"
          });
-      };
+      }
+
+      // =========================
+      // Find user
+      // =========================
 
       const user = await userModel.findOne({ email });
 
-        if (!user) {
-        return res.status(404).json({
+      if (!user) {
+         return res.status(404).json({
             message: "User not found"
-        });
-        }
+         });
+      }
 
-        if (user.verified) {
-        return res.status(400).json({
+      // =========================
+      // Already verified
+      // =========================
+
+      if (user.verified) {
+         return res.status(400).json({
             message: "User already verified"
-        });
-        }
+         });
+      }
 
-        const otpDoc = await otpModel.findOne({
-         email
+      // =========================
+      // Find existing OTP doc
+      // =========================
+
+      let otpDoc = await otpModel.findOne({
+         user: user._id
       });
-
-      
 
       // =========================
       // Check cooldown
       // =========================
 
-      if (otpDoc,
+      if (
+         otpDoc &&
          otpDoc.blockedUntil &&
          otpDoc.blockedUntil > Date.now()
       ) {
@@ -507,15 +522,22 @@ export const resendOtp = async (req, res) => {
          });
       }
 
-      // reset cooldown after expiry
+      // =========================
+      // Reset cooldown if expired
+      // =========================
 
-      if (otpDoc,
+      if (
+         otpDoc &&
          otpDoc.blockedUntil &&
          otpDoc.blockedUntil <= Date.now()
       ) {
          otpDoc.blockedUntil = null;
       }
-      
+
+      // =========================
+      // Generate new OTP
+      // =========================
+
       const otp = generateOtp();
 
       const otpHash = crypto
@@ -523,7 +545,33 @@ export const resendOtp = async (req, res) => {
          .update(otp.toString())
          .digest("hex");
 
+      // =========================
+      // If otpDoc doesn't exist
+      // create new one
+      // =========================
+      const cooldownTime = 30 * 1000;
+
+        if (
+        otpDoc &&
+        Date.now() - otpDoc.lastSentAt.getTime()
+        < cooldownTime
+        ) {
+
+        const remainingTime = Math.ceil(
+            (
+                cooldownTime -
+                (Date.now() - otpDoc.lastSentAt.getTime())
+            ) / 1000
+        );
+
+        return res.status(429).json({
+            message:
+                `Please wait ${remainingTime} seconds before requesting another OTP`
+        });
+        };
+
       if (!otpDoc) {
+
          otpDoc = await otpModel.create({
             email,
             user: user._id,
@@ -535,31 +583,7 @@ export const resendOtp = async (req, res) => {
             )
          });
 
-      }
-      // =========================
-      // Increment attempts
-      // =========================
-  
-      otpDoc.attempts += 1;
-
-      // =========================
-      // Block after 5 attempts
-      // =========================
-
-      if (otpDoc.attempts >= 5) {
-
-         otpDoc.blockedUntil =
-            new Date(Date.now() + 2 * 60 * 1000);
-
-         otpDoc.attempts = 0;
-
-         await otpDoc.save();
-
-         return res.status(429).json({
-            message:
-               "Too many OTP requests. Try again in 2 minutes."
-         });
-      }else {
+      } else {
 
          // =========================
          // Increment attempts
@@ -586,13 +610,19 @@ export const resendOtp = async (req, res) => {
             });
          }
 
-          otpDoc.otpHash = otpHash;
+         // =========================
+         // Update OTP doc
+         // =========================
 
-          otpDoc.expiresAt =
+         otpDoc.otpHash = otpHash;
+
+         otpDoc.expiresAt =
             new Date(Date.now() + 5 * 60 * 1000);
+        
+         otpDoc.lastSentAt = new Date();
 
-         await otpDoc.save(); 
-     };
+         await otpDoc.save();
+      }
 
       // =========================
       // Send email

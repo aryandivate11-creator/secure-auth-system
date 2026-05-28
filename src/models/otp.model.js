@@ -27,7 +27,11 @@ const otpSchema = new mongoose.Schema({
    blockedUntil:{
     type:Date,
     deafult:null
-   }
+   },
+   lastSentAt: {
+   type: Date,
+   default: Date.now
+}
 }, {
     timestamps: true
 });
