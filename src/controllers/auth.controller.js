@@ -193,6 +193,7 @@ export const register = async (req, res) =>{
 };
 
 export const login = async(req,res) =>{
+
       const {email, password} = req.body;
 
       const user = await userModel.findOne({email});
@@ -459,28 +460,38 @@ export const resendOtp = async (req, res) => {
    try {
 
       const { email } = req.body;
-
+   
       if (!email) {
          return res.status(400).json({
             message: "Email is required"
          });
-      }
+      };
 
-      const otpDoc = await otpModel.findOne({
+      const user = await userModel.findOne({ email });
+
+        if (!user) {
+        return res.status(404).json({
+            message: "User not found"
+        });
+        }
+
+        if (user.verified) {
+        return res.status(400).json({
+            message: "User already verified"
+        });
+        }
+
+        const otpDoc = await otpModel.findOne({
          email
       });
 
-      if (!otpDoc) {
-         return res.status(404).json({
-            message: "OTP request not found"
-         });
-      }
+      
 
       // =========================
       // Check cooldown
       // =========================
 
-      if (
+      if (otpDoc,
          otpDoc.blockedUntil &&
          otpDoc.blockedUntil > Date.now()
       ) {
@@ -498,17 +509,37 @@ export const resendOtp = async (req, res) => {
 
       // reset cooldown after expiry
 
-      if (
+      if (otpDoc,
          otpDoc.blockedUntil &&
          otpDoc.blockedUntil <= Date.now()
       ) {
          otpDoc.blockedUntil = null;
       }
+      
+      const otp = generateOtp();
 
+      const otpHash = crypto
+         .createHash("sha256")
+         .update(otp.toString())
+         .digest("hex");
+
+      if (!otpDoc) {
+         otpDoc = await otpModel.create({
+            email,
+            user: user._id,
+            otpHash,
+            attempts: 1,
+            blockedUntil: null,
+            expiresAt: new Date(
+               Date.now() + 5 * 60 * 1000
+            )
+         });
+
+      }
       // =========================
       // Increment attempts
       // =========================
-
+  
       otpDoc.attempts += 1;
 
       // =========================
@@ -528,29 +559,40 @@ export const resendOtp = async (req, res) => {
             message:
                "Too many OTP requests. Try again in 2 minutes."
          });
-      }
+      }else {
 
-      // =========================
-      // Generate new OTP
-      // =========================
+         // =========================
+         // Increment attempts
+         // =========================
 
-      const otp = generateOtp();
+         otpDoc.attempts += 1;
 
-      const otpHash = crypto
-         .createHash("sha256")
-         .update(otp.toString())
-         .digest("hex");
+         // =========================
+         // Block after 5 attempts
+         // =========================
 
-      // =========================
-      // Update OTP
-      // =========================
+         if (otpDoc.attempts >= 5) {
 
-      otpDoc.otpHash = otpHash;
+            otpDoc.blockedUntil =
+               new Date(Date.now() + 2 * 60 * 1000);
 
-      otpDoc.expiresAt =
-         new Date(Date.now() + 5 * 60 * 1000);
+            otpDoc.attempts = 0;
 
-      await otpDoc.save();
+            await otpDoc.save();
+
+            return res.status(429).json({
+               message:
+                  "Too many OTP requests. Try again in 2 minutes."
+            });
+         }
+
+          otpDoc.otpHash = otpHash;
+
+          otpDoc.expiresAt =
+            new Date(Date.now() + 5 * 60 * 1000);
+
+         await otpDoc.save(); 
+     };
 
       // =========================
       // Send email
