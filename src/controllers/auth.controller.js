@@ -545,10 +545,6 @@ export const resendOtp = async (req, res) => {
          .update(otp.toString())
          .digest("hex");
 
-      // =========================
-      // If otpDoc doesn't exist
-      // create new one
-      // =========================
       const cooldownTime = 30 * 1000;
 
         if (
@@ -569,7 +565,13 @@ export const resendOtp = async (req, res) => {
                 `Please wait ${remainingTime} seconds before requesting another OTP`
         });
         };
-
+    
+        
+      // =========================
+      // If otpDoc doesn't exist
+      // create new one
+      // =========================
+      
       if (!otpDoc) {
 
          otpDoc = await otpModel.create({
@@ -580,7 +582,8 @@ export const resendOtp = async (req, res) => {
             blockedUntil: null,
             expiresAt: new Date(
                Date.now() + 5 * 60 * 1000
-            )
+            ),
+            purpose: "EMAIL_VERIFICATION",
          });
 
       } else {
@@ -648,3 +651,157 @@ export const resendOtp = async (req, res) => {
       });
    }
 };
+
+export const forgotPassword = async (req, res) => {
+
+   try {
+
+      const { email } = req.body;
+
+      if (!email) {
+         return res.status(400).json({
+            message: "Email is required"
+         });
+      }
+
+      const user = await userModel.findOne({
+         email
+      });
+
+      // Prevent email enumeration
+      if (!user) {
+         return res.status(200).json({
+            message:
+               "If an account exists, an OTP has been sent."
+         });
+      }
+
+      if (!user.verified) {
+         return res.status(400).json({
+            message:
+               "Please verify your email first."
+         });
+      }
+
+      // Remove previous password reset OTPs
+
+      await otpModel.deleteMany({
+         user: user._id,
+         purpose: "PASSWORD_RESET"
+      });
+
+      const otp = generateOtp();
+
+      const otpHash = crypto
+         .createHash("sha256")
+         .update(otp.toString())
+         .digest("hex");
+
+      await otpModel.create({
+         email,
+         user: user._id,
+         otpHash,
+         purpose: "PASSWORD_RESET",
+         expiresAt: new Date(
+            Date.now() + 5 * 60 * 1000
+         )
+      });
+
+      await sendEmail(
+         email,
+         "Password Reset OTP",
+         `Your OTP is ${otp}`,
+         getOtpHTML(otp)
+      );
+
+      return res.status(200).json({
+         message:
+            "If an account exists, an OTP has been sent."
+      });
+
+   } catch (error) {
+
+      console.log(error);
+
+      return res.status(500).json({
+         message: "Internal server error"
+      });
+
+   }
+};
+
+export const verifyResetOtp = async(req,res) =>{
+    try {
+        const {email,otp} = req.body;
+
+        if(!email || !otp){
+            return res.status(400).json({
+                message:"Email and OTP and required !"
+            })
+        };
+
+         const otpHash = crypto
+         .createHash("sha256")
+         .update(otp.toString())
+         .digest("hex");
+
+        const otpDoc = await otpModel.findOne({
+            email,
+            otpHash,
+            purpose: "PASSWORD_RESET"
+        });
+
+        if(!otpDoc){
+            return res.status(400).json({
+                message:"Invalid OTP"
+            })
+        };
+
+        const createdAt = otpDoc.createdAt.getTime();
+
+        const isExpired =
+        Date.now() - createdAt > 1 * 60 * 1000;
+
+        if(isExpired){
+            await otpModel.deleteMany({
+                 user: otpDoc.user,
+            purpose: "PASSWORD_RESET"
+            });
+
+            return res.status(400).json({
+            message: "OTP expired"
+         });
+        };
+
+        const resetToken = jwt.sign(
+             {
+            id: otpDoc.user,
+            purpose: "PASSWORD_RESET"
+            },
+            config.JWT_SECRET,
+            {
+                expiresIn: "10m"
+            }
+        );
+
+        await otpModel.deleteMany({
+         user: otpDoc.user,
+         purpose: "PASSWORD_RESET"
+      });
+
+      return res.status(200).json({
+         message: "OTP verified successfully",
+         resetToken
+      });
+
+   } catch (error) {
+
+      console.log(error);
+
+      return res.status(500).json({
+         message: "Internal server error"
+      });
+
+   }
+};
+

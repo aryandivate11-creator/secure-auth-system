@@ -31,6 +31,11 @@ const otpSchema = new mongoose.Schema({
    lastSentAt: {
    type: Date,
    default: Date.now
+},
+purpose: {
+   type: String,
+   enum: ["EMAIL_VERIFICATION", "PASSWORD_RESET"],
+   required: true
 }
 }, {
     timestamps: true
